@@ -35,7 +35,7 @@ class Memic:
         ... )
     """
 
-    DEFAULT_BASE_URL = "https://app.memic.ai"
+    DEFAULT_BASE_URL = "https://memic-backend-prod.up.railway.app/api/v1"
     DEFAULT_TIMEOUT = 30
     DEFAULT_POLL_INTERVAL = 2.0
     DEFAULT_POLL_TIMEOUT = 300
