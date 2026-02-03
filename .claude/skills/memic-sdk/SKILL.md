@@ -9,12 +9,22 @@ Help the developer integrate Memic's unified search API into their application.
 
 ## First: Understand the Use Case
 
-**Ask the developer:** "How are you planning to use Memic?"
+**Ask the developer two questions:**
+
+### Question 1: Integration Pattern
+"How are you planning to use Memic?"
 
 1. **Context tool for an AI agent** - Memic provides RAG/context for your LLM-based agent (e.g., chatbot, copilot, AI assistant)
 2. **Deterministic service** - Direct API integration for search functionality in your app (no AI/LLM involved)
 
-Based on their answer, tailor your guidance:
+### Question 2: Data Source
+"What type of data will you be searching?"
+
+1. **Unstructured (Documents & Files)** - PDFs, Word docs, text files → Vector-based semantic search
+2. **Structured (SQL, Excel, etc.)** - PostgreSQL/MySQL databases, spreadsheets → Natural language to SQL queries
+3. **Hybrid** - Combine both unstructured and structured data sources
+
+Based on their answers, tailor your guidance:
 
 ### If Context Tool for AI Agent:
 - Emphasize how search results become context for LLM prompts
@@ -27,6 +37,22 @@ Based on their answer, tailor your guidance:
 - Emphasize filtering, pagination, and result handling
 - Show how to build traditional search UIs
 - Discuss caching strategies for performance
+
+### If Unstructured (Documents & Files):
+- Focus on file upload, processing status, and semantic search
+- Explain chunking and embedding pipeline
+- Show `MetadataFilters` for precise filtering
+
+### If Structured (SQL, Excel, etc.):
+- Explain that Memic converts natural language to SQL automatically (Text2SQL)
+- Connector setup is done via dashboard (not SDK in v0.1)
+- Search API handles routing - same interface for both data types
+- Results include `structured_results` with database rows
+
+### If Hybrid:
+- Explain unified search routes queries intelligently to the right source
+- Same `search()` call can return both document chunks AND database results
+- Memic auto-classifies queries based on intent and available data sources
 
 ## Prerequisites Check
 
@@ -88,39 +114,86 @@ Tell the developer:
 > "Your organization has no projects yet. Go to https://app.memic.ai and create a project first. Each project represents a tenant/client in your multi-tenant setup."
 
 ### If Projects Exist, Check for Data:
-Guide the developer to check if they have:
+Guide the developer to check what data sources they have configured:
 
 1. **Unstructured data (files/documents)**: Go to the project in the dashboard and check if files are uploaded
 2. **Structured data (database connectors)**: Go to Connectors page and check if any databases are connected
 
+**Ask the developer:** "Based on what you see in the dashboard:
+- Do you have **documents/files** uploaded?
+- Do you have **database connectors** configured?
+- Or **both**?"
+
+This helps confirm their intended data source from Question 2 matches their actual setup.
+
 ### If No Data Found:
-Tell the developer:
-> "Your project is empty. Before we can test search, you need to add some data:
->
-> **Option A: Upload documents** (PDFs, Word docs, etc.)
+Tell the developer based on their intended data source:
+
+**For Unstructured (Documents & Files):**
+> "Your project has no files yet. Let's add some:
 > - Go to https://app.memic.ai → Your Project → Upload files
 > - Or use the SDK: `client.upload_file(project_id, '/path/to/doc.pdf')`
-> - Wait for status to become 'ready'
->
-> **Option B: Connect a database** (for Text2SQL)
+> - Wait for status to become 'ready'"
+
+**For Structured (SQL, Excel, etc.):**
+> "No database connectors found. Let's set one up:
 > - Go to https://app.memic.ai → Connectors → Add Connector
-> - Enter your PostgreSQL/MySQL connection details
-> - Configure the schema for natural language queries
->
-> Once you have data, come back and we'll test the search!"
+> - Enter your PostgreSQL/MySQL connection URL or details
+> - Configure the schema and add descriptions for better Text2SQL accuracy
+> - The connector will auto-discover your tables"
+
+**For Hybrid:**
+> "For hybrid search, you'll need both data sources configured. Start with whichever is most important for your use case."
 
 ### If Data Exists:
-Proceed with the integration. Offer to run a test search:
+Confirm the data matches their intended use case. Then proceed with the integration.
+
+**If they have documents but wanted structured:** Ask if they want to add a connector, or pivot to document search.
+
+**If they have connectors but wanted documents:** Ask if they want to upload files, or pivot to Text2SQL.
+
+Offer to run a test search based on their data source:
+
+**For Unstructured (Documents):**
 ```python
-# Test search
+# Test semantic search over documents
 results = client.search(
-    query="test query",
+    query="What are the key findings?",
     project_id="<their-project-id>",
     top_k=3
 )
-print(f"Found {results.total_results} results")
+print(f"Found {results.total_results} document results")
 for r in results:
     print(f"  [{r.score:.2f}] {r.file_name}: {r.content[:100]}...")
+```
+
+**For Structured (SQL/Database):**
+```python
+# Test natural language to SQL query
+results = client.search(
+    query="Show me top 10 customers by revenue",
+    project_id="<their-project-id>",
+    top_k=10
+)
+print(f"Query routed to: {results.routing.route if results.routing else 'semantic'}")
+if results.routing and results.routing.sql_generated:
+    print(f"Generated SQL: {results.routing.sql_generated}")
+print(f"Found {len(results.structured_results)} rows")
+for row in results.structured_results[:5]:
+    print(f"  {row.data}")
+```
+
+**For Hybrid:**
+```python
+# Hybrid search - Memic auto-routes to the right source
+results = client.search(
+    query="What's our revenue trend?",  # Could match docs OR database
+    project_id="<their-project-id>",
+    top_k=5
+)
+print(f"Route: {results.routing.route if results.routing else 'semantic'}")
+print(f"Document results: {len(results.results)}")
+print(f"Structured results: {len(results.structured_results)}")
 ```
 
 ## Step 5: Multi-Tenant Architecture
