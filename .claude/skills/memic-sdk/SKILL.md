@@ -64,7 +64,66 @@ Or export directly:
 export MEMIC_API_KEY=mk_your_api_key_here
 ```
 
-## Step 4: Multi-Tenant Architecture
+## Step 4: Verify Account Setup
+
+**IMPORTANT**: After the developer provides their API key, run this check to verify their account has data to work with.
+
+```python
+from memic import Memic
+
+client = Memic()
+
+# Check projects and data
+projects = client.list_projects()
+print(f"Found {len(projects)} project(s)")
+
+for p in projects:
+    print(f"  - {p.name} ({p.id})")
+```
+
+**Ask Claude to run this code** and evaluate the results:
+
+### If No Projects Found:
+Tell the developer:
+> "Your organization has no projects yet. Go to https://app.memic.ai and create a project first. Each project represents a tenant/client in your multi-tenant setup."
+
+### If Projects Exist, Check for Data:
+Guide the developer to check if they have:
+
+1. **Unstructured data (files/documents)**: Go to the project in the dashboard and check if files are uploaded
+2. **Structured data (database connectors)**: Go to Connectors page and check if any databases are connected
+
+### If No Data Found:
+Tell the developer:
+> "Your project is empty. Before we can test search, you need to add some data:
+>
+> **Option A: Upload documents** (PDFs, Word docs, etc.)
+> - Go to https://app.memic.ai → Your Project → Upload files
+> - Or use the SDK: `client.upload_file(project_id, '/path/to/doc.pdf')`
+> - Wait for status to become 'ready'
+>
+> **Option B: Connect a database** (for Text2SQL)
+> - Go to https://app.memic.ai → Connectors → Add Connector
+> - Enter your PostgreSQL/MySQL connection details
+> - Configure the schema for natural language queries
+>
+> Once you have data, come back and we'll test the search!"
+
+### If Data Exists:
+Proceed with the integration. Offer to run a test search:
+```python
+# Test search
+results = client.search(
+    query="test query",
+    project_id="<their-project-id>",
+    top_k=3
+)
+print(f"Found {results.total_results} results")
+for r in results:
+    print(f"  [{r.score:.2f}] {r.file_name}: {r.content[:100]}...")
+```
+
+## Step 5: Multi-Tenant Architecture
 
 Explain that in Memic, each **Project** represents one **client/tenant**:
 
@@ -83,7 +142,7 @@ TENANT_PROJECTS = {
 }
 ```
 
-## Step 5: Core Implementation
+## Step 6: Core Implementation
 
 ### Initialize Client
 ```python
