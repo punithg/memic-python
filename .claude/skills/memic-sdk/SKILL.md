@@ -7,6 +7,27 @@ description: Help developers integrate Memic's unified search API into their mul
 
 Help the developer integrate Memic's unified search API into their application.
 
+## First: Understand the Use Case
+
+**Ask the developer:** "How are you planning to use Memic?"
+
+1. **Context tool for an AI agent** - Memic provides RAG/context for your LLM-based agent (e.g., chatbot, copilot, AI assistant)
+2. **Deterministic service** - Direct API integration for search functionality in your app (no AI/LLM involved)
+
+Based on their answer, tailor your guidance:
+
+### If Context Tool for AI Agent:
+- Emphasize how search results become context for LLM prompts
+- Show how to format results for injection into system/user prompts
+- Discuss chunking strategies and relevance scoring for better AI responses
+- Mention `reference_id` for tracking which documents informed AI answers
+
+### If Deterministic Service:
+- Focus on direct search integration patterns
+- Emphasize filtering, pagination, and result handling
+- Show how to build traditional search UIs
+- Discuss caching strategies for performance
+
 ## Prerequisites Check
 
 Before starting, confirm the developer has:
@@ -105,6 +126,103 @@ results = client.search(
 
 for result in results:
     print(f"[{result.score:.2f}] {result.file_name}: {result.content[:100]}")
+```
+
+## Use Case Specific Patterns
+
+### Pattern A: Context Tool for AI Agent
+
+Use Memic search results as context for your LLM:
+
+```python
+from memic import Memic, MetadataFilters
+from openai import OpenAI  # or anthropic, etc.
+
+memic = Memic()
+llm = OpenAI()
+
+def ask_with_context(user_question: str, project_id: str) -> str:
+    # 1. Get relevant context from Memic
+    results = memic.search(
+        query=user_question,
+        project_id=project_id,
+        top_k=5,
+        min_score=0.7,
+    )
+
+    # 2. Format context for LLM
+    context = "\n\n".join([
+        f"[Source: {r.file_name}, Page {r.page_number}]\n{r.content}"
+        for r in results
+    ])
+
+    # 3. Generate response with context
+    response = llm.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": f"Answer based on this context:\n\n{context}"},
+            {"role": "user", "content": user_question}
+        ]
+    )
+
+    return response.choices[0].message.content
+
+# Usage
+answer = ask_with_context("What are the Q4 results?", project_id="...")
+```
+
+### Pattern B: Deterministic Service
+
+Direct integration for traditional search functionality:
+
+```python
+from memic import Memic, MetadataFilters, PageRange
+from typing import List, Dict
+
+memic = Memic()
+
+def search_documents(
+    query: str,
+    tenant_id: str,
+    page: int = 1,
+    page_size: int = 10,
+    category: str = None,
+) -> Dict:
+    """Search API for your application."""
+
+    # Map tenant to Memic project
+    project_id = TENANT_PROJECTS[tenant_id]
+
+    # Build filters
+    filters = None
+    if category:
+        filters = MetadataFilters(category=category)
+
+    # Search with offset for pagination
+    results = memic.search(
+        query=query,
+        project_id=project_id,
+        top_k=page_size,
+        min_score=0.5,  # Lower threshold for broader results
+        filters=filters,
+    )
+
+    # Format response for your API
+    return {
+        "query": query,
+        "results": [
+            {
+                "title": r.file_name,
+                "snippet": r.content[:300],
+                "page": r.page_number,
+                "score": r.score,
+                "file_id": r.file_id,
+            }
+            for r in results
+        ],
+        "total": results.total_results,
+        "search_time_ms": results.search_time_ms,
+    }
 ```
 
 ## Debugging Guide
