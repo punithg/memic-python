@@ -126,6 +126,45 @@ class MetadataFilters(BaseModel):
         return result
 
 
+class ColumnInfo(BaseModel):
+    """Column metadata for structured results."""
+
+    name: str = Field(description="Column name")
+    type: str = Field(description="Column data type (e.g., varchar, integer)")
+    description: Optional[str] = Field(None, description="Human-readable column description")
+
+
+class StructuredResult(BaseModel):
+    """Structured query results with schema metadata."""
+
+    columns: List[ColumnInfo] = Field(default_factory=list, description="Column metadata")
+    rows: List[Dict[str, Any]] = Field(default_factory=list, description="Result rows as key-value objects")
+
+    def __len__(self) -> int:
+        """Return number of rows."""
+        return len(self.rows)
+
+    def __iter__(self) -> Iterator[Dict[str, Any]]:  # type: ignore[override]
+        """Allow iterating directly over rows."""
+        return iter(self.rows)
+
+    @property
+    def has_data(self) -> bool:
+        """Check if there are any rows."""
+        return len(self.rows) > 0
+
+
+class SearchRouting(BaseModel):
+    """Routing information for hybrid search."""
+
+    route: str = Field(description="Route taken: 'semantic', 'structured', or 'hybrid'")
+    reasoning: Optional[str] = Field(None, description="Explanation of routing decision")
+    connector_id: Optional[str] = Field(None, description="Database connector ID if structured")
+    connector_name: Optional[str] = Field(None, description="Database connector name")
+    sql_generated: Optional[str] = Field(None, description="Generated SQL query for structured search")
+    sql_explanation: Optional[str] = Field(None, description="Explanation of the generated SQL")
+
+
 class SearchResult(BaseModel):
     """Individual search result chunk."""
 
@@ -145,24 +184,68 @@ class SearchResult(BaseModel):
     bounding_boxes: Optional[Dict[str, Any]] = None
 
 
+class ResultsContainer(BaseModel):
+    """Container for all result types (semantic and structured)."""
+
+    semantic: List[SearchResult] = Field(default_factory=list, description="Semantic search results")
+    structured: Optional[StructuredResult] = Field(None, description="Structured query results with schema")
+
+
 class SearchResults(BaseModel):
-    """Container for search results with metadata."""
+    """Container for search results with metadata.
+
+    Supports both semantic (document) and structured (database) results.
+
+    Example:
+        >>> results = client.search(query="revenue data", project_id="...")
+        >>> # Check routing
+        >>> if results.routing:
+        ...     print(f"Routed to: {results.routing.route}")
+        >>> # Document results
+        >>> for r in results.results.semantic:
+        ...     print(f"[{r.score:.2f}] {r.file_name}: {r.content[:100]}")
+        >>> # Database results
+        >>> if results.results.structured:
+        ...     for row in results.results.structured.rows:
+        ...         print(f"Row: {row}")
+    """
 
     model_config = {"arbitrary_types_allowed": True}
 
     query: str
-    results: List[SearchResult] = Field(default_factory=list)
+    results: ResultsContainer = Field(default_factory=ResultsContainer)
+    routing: Optional[SearchRouting] = None
     total_results: int = 0
     search_time_ms: float = 0.0
 
     def __iter__(self) -> Iterator[SearchResult]:  # type: ignore[override]
-        """Allow iterating directly over results."""
-        return iter(self.results)
+        """Allow iterating directly over semantic results for convenience."""
+        return iter(self.results.semantic)
 
     def __len__(self) -> int:
-        """Return number of results."""
-        return len(self.results)
+        """Return number of semantic results."""
+        return len(self.results.semantic)
 
     def __getitem__(self, index: int) -> SearchResult:
-        """Allow indexing into results."""
-        return self.results[index]
+        """Allow indexing into semantic results."""
+        return self.results.semantic[index]
+
+    @property
+    def semantic(self) -> List[SearchResult]:
+        """Shortcut to access semantic results."""
+        return self.results.semantic
+
+    @property
+    def structured(self) -> Optional[StructuredResult]:
+        """Shortcut to access structured results."""
+        return self.results.structured
+
+    @property
+    def has_structured(self) -> bool:
+        """Check if results include structured/database data."""
+        return self.results.structured is not None and self.results.structured.has_data
+
+    @property
+    def has_documents(self) -> bool:
+        """Check if results include document data."""
+        return len(self.results.semantic) > 0

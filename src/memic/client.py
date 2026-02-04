@@ -10,7 +10,18 @@ import requests
 
 from ._version import __version__
 from .exceptions import APIError, AuthenticationError, MemicError, NotFoundError
-from .types import File, FileStatus, MetadataFilters, Project, SearchResult, SearchResults
+from .types import (
+    ColumnInfo,
+    File,
+    FileStatus,
+    MetadataFilters,
+    Project,
+    ResultsContainer,
+    SearchResult,
+    SearchResults,
+    SearchRouting,
+    StructuredResult,
+)
 
 
 class Memic:
@@ -388,7 +399,11 @@ class Memic:
             json=payload,
         )
 
-        results = [
+        # Parse nested results structure
+        results_data = response.get("results", {})
+
+        # Parse semantic/document results
+        semantic_results = [
             SearchResult(
                 chunk_id=str(r.get("chunk_id", "")),
                 file_id=str(r.get("file_id", "")),
@@ -405,13 +420,47 @@ class Memic:
                 document_type=r.get("document_type"),
                 bounding_boxes=r.get("bounding_boxes"),
             )
-            for r in response.get("results", [])
+            for r in results_data.get("semantic", [])
         ]
+
+        # Parse structured/database results with column metadata
+        structured_result = None
+        structured_data = results_data.get("structured")
+        if structured_data:
+            columns = [
+                ColumnInfo(
+                    name=c.get("name", ""),
+                    type=c.get("type", "unknown"),
+                    description=c.get("description"),
+                )
+                for c in structured_data.get("columns", [])
+            ]
+            structured_result = StructuredResult(
+                columns=columns,
+                rows=structured_data.get("rows", []),
+            )
+
+        # Parse routing information
+        routing = None
+        if response.get("routing"):
+            routing_data = response["routing"]
+            routing = SearchRouting(
+                route=routing_data.get("route", "semantic"),
+                reasoning=routing_data.get("reasoning"),
+                connector_id=routing_data.get("connector_id"),
+                connector_name=routing_data.get("connector_name"),
+                sql_generated=routing_data.get("sql_generated"),
+                sql_explanation=routing_data.get("sql_explanation"),
+            )
 
         return SearchResults(
             query=response.get("query", query),
-            results=results,
-            total_results=response.get("total_results", len(results)),
+            results=ResultsContainer(
+                semantic=semantic_results,
+                structured=structured_result,
+            ),
+            routing=routing,
+            total_results=response.get("total_results", len(semantic_results)),
             search_time_ms=response.get("search_time_ms", 0.0),
         )
 
