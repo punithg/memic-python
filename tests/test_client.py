@@ -46,15 +46,8 @@ def file_id() -> str:
 
 
 @pytest.fixture
-@responses.activate
-def client(api_key: str, base_url: str, org_id: str) -> Memic:
-    """Create a Memic client with mocked org_id fetch."""
-    responses.add(
-        responses.GET,
-        f"{base_url}/api-keys/me",
-        json={"organization_id": org_id, "organization_name": "Test Org"},
-        status=200,
-    )
+def client(api_key: str, base_url: str) -> Memic:
+    """Create a Memic client (context is lazy-fetched, no mock needed at init)."""
     return Memic(api_key=api_key, base_url=base_url)
 
 
@@ -102,7 +95,7 @@ class TestOrgIdFetch:
         """org_id is fetched from API on first access."""
         responses.add(
             responses.GET,
-            f"{base_url}/api-keys/me",
+            f"{base_url}/sdk/me",
             json={"organization_id": org_id, "organization_name": "Test Org"},
             status=200,
         )
@@ -117,7 +110,7 @@ class TestOrgIdFetch:
         """org_id is cached after first fetch."""
         responses.add(
             responses.GET,
-            f"{base_url}/api-keys/me",
+            f"{base_url}/sdk/me",
             json={"organization_id": org_id},
             status=200,
         )
@@ -140,13 +133,7 @@ class TestListProjects:
         """list_projects returns list of Project objects."""
         responses.add(
             responses.GET,
-            f"{base_url}/api-keys/me",
-            json={"organization_id": org_id},
-            status=200,
-        )
-        responses.add(
-            responses.GET,
-            f"{base_url}/organizations/{org_id}/projects/",
+            f"{base_url}/sdk/projects",
             json=[
                 {"id": "proj-1", "name": "Project 1", "organization_id": org_id, "is_active": True},
                 {"id": "proj-2", "name": "Project 2", "organization_id": org_id, "is_active": True},
@@ -167,19 +154,13 @@ class TestUploadFile:
 
     @responses.activate
     def test_upload_file_success(
-        self, api_key: str, base_url: str, org_id: str, project_id: str, file_id: str
+        self, api_key: str, base_url: str, project_id: str, file_id: str
     ) -> None:
         """upload_file completes 3-step flow."""
         # Setup mocks
         responses.add(
-            responses.GET,
-            f"{base_url}/api-keys/me",
-            json={"organization_id": org_id},
-            status=200,
-        )
-        responses.add(
             responses.POST,
-            f"{base_url}/projects/{project_id}/files/init",
+            f"{base_url}/sdk/files/init",
             json={
                 "file_id": file_id,
                 "upload_url": "https://storage.example.com/upload",
@@ -194,7 +175,7 @@ class TestUploadFile:
         )
         responses.add(
             responses.POST,
-            f"{base_url}/projects/{project_id}/files/{file_id}/confirm",
+            f"{base_url}/sdk/files/{file_id}/confirm",
             json={
                 "id": file_id,
                 "name": "test.pdf",
@@ -215,7 +196,6 @@ class TestUploadFile:
         try:
             client = Memic(api_key=api_key, base_url=base_url)
             file = client.upload_file(
-                project_id=project_id,
                 file_path=temp_path,
                 wait_for_ready=False,
             )
@@ -231,7 +211,6 @@ class TestUploadFile:
 
         with pytest.raises(FileNotFoundError, match="File not found"):
             client.upload_file(
-                project_id="proj-123",
                 file_path="/nonexistent/file.pdf",
             )
 
@@ -246,7 +225,7 @@ class TestGetFileStatus:
         """get_file_status returns File object."""
         responses.add(
             responses.GET,
-            f"{base_url}/projects/{project_id}/files/{file_id}/status",
+            f"{base_url}/sdk/files/{file_id}/status",
             json={
                 "id": file_id,
                 "name": "test.pdf",
@@ -261,7 +240,7 @@ class TestGetFileStatus:
         )
 
         client = Memic(api_key=api_key, base_url=base_url)
-        file = client.get_file_status(project_id, file_id)
+        file = client.get_file_status(file_id)
 
         assert file.id == file_id
         assert file.status == FileStatus.PARSING_STARTED
@@ -274,40 +253,36 @@ class TestSearch:
 
     @responses.activate
     def test_search_basic(
-        self, api_key: str, base_url: str, org_id: str, project_id: str
+        self, api_key: str, base_url: str, project_id: str
     ) -> None:
         """search returns SearchResults with matching chunks."""
         responses.add(
-            responses.GET,
-            f"{base_url}/api-keys/me",
-            json={"organization_id": org_id},
-            status=200,
-        )
-        responses.add(
             responses.POST,
-            f"{base_url}/organizations/{org_id}/search/",
+            f"{base_url}/sdk/search",
             json={
                 "query": "test query",
-                "results": [
-                    {
-                        "chunk_id": "chunk-1",
-                        "file_id": "file-1",
-                        "file_name": "doc.pdf",
-                        "content": "This is the matching content",
-                        "score": 0.95,
-                        "chunk_index": 0,
-                        "page_number": 1,
-                    },
-                    {
-                        "chunk_id": "chunk-2",
-                        "file_id": "file-1",
-                        "file_name": "doc.pdf",
-                        "content": "Another match",
-                        "score": 0.85,
-                        "chunk_index": 1,
-                        "page_number": 2,
-                    },
-                ],
+                "results": {
+                    "semantic": [
+                        {
+                            "chunk_id": "chunk-1",
+                            "file_id": "file-1",
+                            "file_name": "doc.pdf",
+                            "content": "This is the matching content",
+                            "score": 0.95,
+                            "chunk_index": 0,
+                            "page_number": 1,
+                        },
+                        {
+                            "chunk_id": "chunk-2",
+                            "file_id": "file-1",
+                            "file_name": "doc.pdf",
+                            "content": "Another match",
+                            "score": 0.85,
+                            "chunk_index": 1,
+                            "page_number": 2,
+                        },
+                    ],
+                },
                 "total_results": 2,
                 "search_time_ms": 125.5,
             },
@@ -326,19 +301,13 @@ class TestSearch:
 
     @responses.activate
     def test_search_with_filters(
-        self, api_key: str, base_url: str, org_id: str
+        self, api_key: str, base_url: str
     ) -> None:
         """search passes metadata filters correctly."""
         responses.add(
-            responses.GET,
-            f"{base_url}/api-keys/me",
-            json={"organization_id": org_id},
-            status=200,
-        )
-        responses.add(
             responses.POST,
-            f"{base_url}/organizations/{org_id}/search/",
-            json={"query": "test", "results": [], "total_results": 0, "search_time_ms": 50.0},
+            f"{base_url}/sdk/search",
+            json={"query": "test", "results": {"semantic": []}, "total_results": 0, "search_time_ms": 50.0},
             status=200,
         )
 
@@ -356,24 +325,20 @@ class TestSearch:
 
     @responses.activate
     def test_search_iterable(
-        self, api_key: str, base_url: str, org_id: str
+        self, api_key: str, base_url: str
     ) -> None:
         """SearchResults is iterable."""
         responses.add(
-            responses.GET,
-            f"{base_url}/api-keys/me",
-            json={"organization_id": org_id},
-            status=200,
-        )
-        responses.add(
             responses.POST,
-            f"{base_url}/organizations/{org_id}/search/",
+            f"{base_url}/sdk/search",
             json={
                 "query": "test",
-                "results": [
-                    {"chunk_id": "1", "file_id": "f1", "file_name": "a.pdf", "content": "A", "score": 0.9},
-                    {"chunk_id": "2", "file_id": "f2", "file_name": "b.pdf", "content": "B", "score": 0.8},
-                ],
+                "results": {
+                    "semantic": [
+                        {"chunk_id": "1", "file_id": "f1", "file_name": "a.pdf", "content": "A", "score": 0.9},
+                        {"chunk_id": "2", "file_id": "f2", "file_name": "b.pdf", "content": "B", "score": 0.8},
+                    ],
+                },
                 "total_results": 2,
                 "search_time_ms": 50.0,
             },
@@ -396,7 +361,7 @@ class TestExceptionHandling:
         """401 response raises AuthenticationError."""
         responses.add(
             responses.GET,
-            f"{base_url}/api-keys/me",
+            f"{base_url}/sdk/me",
             json={"detail": "Invalid API key"},
             status=401,
         )
@@ -410,7 +375,7 @@ class TestExceptionHandling:
         """403 response raises AuthenticationError."""
         responses.add(
             responses.GET,
-            f"{base_url}/api-keys/me",
+            f"{base_url}/sdk/me",
             json={"detail": "Access denied"},
             status=403,
         )
@@ -421,26 +386,26 @@ class TestExceptionHandling:
 
     @responses.activate
     def test_not_found_error(
-        self, api_key: str, base_url: str, project_id: str
+        self, api_key: str, base_url: str
     ) -> None:
         """404 response raises NotFoundError."""
         responses.add(
             responses.GET,
-            f"{base_url}/projects/{project_id}/files/nonexistent/status",
+            f"{base_url}/sdk/files/nonexistent/status",
             json={"detail": "File not found"},
             status=404,
         )
 
         client = Memic(api_key=api_key, base_url=base_url)
         with pytest.raises(NotFoundError, match="File not found"):
-            client.get_file_status(project_id, "nonexistent")
+            client.get_file_status("nonexistent")
 
     @responses.activate
     def test_api_error(self, api_key: str, base_url: str) -> None:
         """500 response raises APIError."""
         responses.add(
             responses.GET,
-            f"{base_url}/api-keys/me",
+            f"{base_url}/sdk/me",
             json={"detail": "Internal server error"},
             status=500,
         )
