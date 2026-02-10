@@ -27,21 +27,20 @@ from .types import (
 class Memic:
     """Memic SDK client for file uploads and semantic search.
 
+    All context (organization, project, environment) is auto-resolved
+    from your API key. No IDs needed in method calls.
+
     Example:
         >>> from memic import Memic, MetadataFilters
         >>>
         >>> client = Memic(api_key="mk_...")  # or use MEMIC_API_KEY env var
         >>>
         >>> # Upload a file
-        >>> file = client.upload_file(
-        ...     project_id="...",
-        ...     file_path="/path/to/doc.pdf",
-        ... )
+        >>> file = client.upload_file("/path/to/doc.pdf")
         >>>
         >>> # Search with filters
         >>> results = client.search(
         ...     query="key findings",
-        ...     project_id="...",
         ...     filters=MetadataFilters(reference_id="TG_G1_Math")
         ... )
     """
@@ -76,6 +75,8 @@ class Memic:
         self.base_url = (base_url or os.environ.get("MEMIC_BASE_URL") or self.DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
         self._org_id: Optional[str] = None
+        self._project_id: Optional[str] = None
+        self._env_slug: Optional[str] = None
 
         self._session = requests.Session()
         self._session.headers.update({
@@ -84,17 +85,35 @@ class Memic:
             "Content-Type": "application/json",
         })
 
+    def _ensure_context(self) -> None:
+        """Fetch org/project/environment context from the API key (once)."""
+        if self._org_id is not None:
+            return
+        response = self._request("GET", "/sdk/me")
+        self._org_id = str(response["organization_id"])
+        if response.get("project_id"):
+            self._project_id = str(response["project_id"])
+        if response.get("environment_slug"):
+            self._env_slug = response["environment_slug"]
+
     @property
     def org_id(self) -> str:
         """Get organization ID (fetched from API key on first access)."""
-        if self._org_id is None:
-            self._org_id = self._fetch_org_id()
+        self._ensure_context()
+        assert self._org_id is not None
         return self._org_id
 
-    def _fetch_org_id(self) -> str:
-        """Fetch organization ID from the API key."""
-        response = self._request("GET", "/api-keys/me")
-        return str(response["organization_id"])
+    @property
+    def project_id(self) -> Optional[str]:
+        """Get project ID resolved from the API key (if environment-scoped)."""
+        self._ensure_context()
+        return self._project_id
+
+    @property
+    def environment_slug(self) -> Optional[str]:
+        """Get environment slug resolved from the API key (if environment-scoped)."""
+        self._ensure_context()
+        return self._env_slug
 
     def _request(
         self,
@@ -174,20 +193,20 @@ class Memic:
             >>> for p in projects:
             ...     print(f"{p.name}: {p.id}")
         """
-        response = self._request("GET", f"/organizations/{self.org_id}/projects/")
+        response = self._request("GET", "/sdk/projects")
         if isinstance(response, list):
             return [Project(**p) for p in response]
         return []
 
     def upload_file(
         self,
-        project_id: str,
         file_path: Union[str, Path],
         wait_for_ready: bool = True,
         reference_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,
+        project_id: Optional[str] = None,  # Deprecated — ignored
     ) -> File:
         """Upload a file to a project.
 
@@ -196,14 +215,17 @@ class Memic:
         2. PUT file directly to storage
         3. Confirm upload to trigger processing
 
+        The target project and environment are automatically resolved from
+        your API key — no IDs needed.
+
         Args:
-            project_id: Target project ID.
             file_path: Path to the file to upload.
             wait_for_ready: If True, poll until file is READY (default: True).
             reference_id: Optional reference ID for external system linking.
             metadata: Optional metadata key-value pairs.
             poll_interval: Seconds between status polls (default: 2.0).
             poll_timeout: Max seconds to wait for READY status (default: 300).
+            project_id: Deprecated — ignored, project is resolved from API key.
 
         Returns:
             File object with current status.
@@ -214,7 +236,6 @@ class Memic:
 
         Example:
             >>> file = client.upload_file(
-            ...     project_id="...",
             ...     file_path="/path/to/doc.pdf",
             ...     reference_id="lesson_123"
             ... )
@@ -242,7 +263,7 @@ class Memic:
 
         init_response = self._request(
             "POST",
-            f"/projects/{project_id}/files/init",
+            "/sdk/files/init",
             json=init_payload,
         )
 
@@ -266,7 +287,7 @@ class Memic:
         # Step 3: Confirm upload
         confirm_response = self._request(
             "POST",
-            f"/projects/{project_id}/files/{file_id}/confirm",
+            f"/sdk/files/{file_id}/confirm",
         )
 
         file = File(**self._normalize_file_response(confirm_response))
@@ -274,7 +295,6 @@ class Memic:
         # Wait for ready if requested
         if wait_for_ready:
             file = self.wait_for_ready(
-                project_id=project_id,
                 file_id=file.id,
                 poll_interval=poll_interval,
                 poll_timeout=poll_timeout,
@@ -282,40 +302,40 @@ class Memic:
 
         return file
 
-    def get_file_status(self, project_id: str, file_id: str) -> File:
+    def get_file_status(self, file_id: str, project_id: Optional[str] = None) -> File:
         """Get the current status of a file.
 
         Args:
-            project_id: Project ID containing the file.
             file_id: File ID to check.
+            project_id: Deprecated — ignored, project is resolved from API key.
 
         Returns:
             File object with current status.
 
         Example:
-            >>> file = client.get_file_status(project_id, file_id)
+            >>> file = client.get_file_status(file_id)
             >>> print(f"Status: {file.status}, is_processing: {file.status.is_processing}")
         """
         response = self._request(
             "GET",
-            f"/projects/{project_id}/files/{file_id}/status",
+            f"/sdk/files/{file_id}/status",
         )
         return File(**self._normalize_file_response(response))
 
     def wait_for_ready(
         self,
-        project_id: str,
         file_id: str,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,
+        project_id: Optional[str] = None,
     ) -> File:
         """Wait for a file to reach READY status.
 
         Args:
-            project_id: Project ID containing the file.
             file_id: File ID to wait for.
             poll_interval: Seconds between status checks (default: 2.0).
             poll_timeout: Max seconds to wait (default: 300).
+            project_id: Deprecated — ignored, project is resolved from API key.
 
         Returns:
             File object with READY status.
@@ -326,7 +346,7 @@ class Memic:
         start_time = time.time()
 
         while True:
-            file = self.get_file_status(project_id, file_id)
+            file = self.get_file_status(file_id)
 
             if file.status == FileStatus.READY:
                 return file
@@ -395,7 +415,7 @@ class Memic:
 
         response = self._request(
             "POST",
-            f"/organizations/{self.org_id}/search/",
+            "/sdk/search",
             json=payload,
         )
 
