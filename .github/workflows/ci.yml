@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  quality:
+    name: Quality Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install package with dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src/
+
+      - name: Type check
+        run: mypy src/memic/
+
+      - name: Run unit tests
+        run: pytest tests/test_client.py -v --cov=memic --cov-report=term
+
+      - name: Build package
+        run: python -m build
+
+  integration:
+    name: Integration Tests (QA)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install package from branch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Wait for QA to be healthy
+        run: |
+          echo "Checking QA backend health..."
+          for i in {1..10}; do
+            if curl -sf "${{ secrets.QA_BACKEND_URL }}/api/v1/health" > /dev/null; then
+              echo "QA backend is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i/10 - waiting 10s..."
+            sleep 10
+          done
+          echo "QA backend not responding after 100s"
+          exit 1
+
+      - name: Run integration tests against QA
+        env:
+          MEMIC_API_KEY: ${{ secrets.QA_SDK_API_KEY }}
+          MEMIC_BASE_URL: ${{ secrets.QA_BACKEND_URL }}/api/v1
+        run: |
+          pytest tests/test_integration.py -v --tb=short
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "## SDK Integration Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: \`${{ secrets.QA_BACKEND_URL }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests ran against the live QA environment" >> $GITHUB_STEP_SUMMARY
